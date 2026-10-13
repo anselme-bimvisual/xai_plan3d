@@ -228,7 +228,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <button class="btn chip" id="tgLib" data-en="◧ Library">◧ 家具库</button>
       <button class="btn chip" id="tgPanel" data-en="Properties ◨">属性 ◨</button>
     </div>
-    <div class="brand"><b data-en="3BR 2LR 2BA · Interior Design">三室两厅两卫 · 装修设计</b><span id="subtitle">原始户型 1:60 · 尺寸单位 mm</span></div>
+    <div class="brand"><b data-en="Floor Plan · Interior Design">三室两厅两卫 · 装修设计</b><span id="subtitle">原始户型 1:60 · 尺寸单位 mm</span></div>
     <div class="grp seg" id="viewSeg" title="切换 2D / 3D (T)" data-en-title="Switch 2D / 3D (T)">
       <span class="pill"></span>
       <button class="btn" data-view="2d" data-en="2D Plan">2D 平面</button>
@@ -392,7 +392,7 @@ function applyStaticLang(){
  *  右：3370/240/2760/240/3950 = 10560
  * ============================================================ */
 // 墙体：[x0,y0,x1,y1,类型]  b=承重(黑) e=外墙 n=可拆非承重 low=矮墙
-const WALLS = [
+let WALLS = [
   // 顶部外墙
   [1580,-240,2120,0,'b'],[1580,0,1820,300,'b'],[2120,-240,4580,0,'e'],[4580,-240,5140,0,'e'],
   [5760,-240,6050,0,'e'],[6050,-240,6600,0,'b'],[6360,0,6600,300,'b'],[6600,-240,9960,0,'e'],
@@ -420,7 +420,7 @@ const WALLS = [
   [6083,4600,6323,6610,'n'],[6323,6370,9960,6610,'n'],
 ];
 // 窗
-const WINS = [
+let WINS = [
   [5140,-240,5760,0],[1580,300,1820,3370],[-240,3370,1580,3610],[2180,3825,2420,4430],
   [10510,6370,12090,6610],[11850,6610,12090,9960],
   // 飘窗（主卧 / 子女房）
@@ -428,7 +428,7 @@ const WINS = [
   [10510,4110,11130,4210],[11030,4210,11130,5785],[10510,5785,11130,5885],
 ];
 // 平开门：洞口、铰点、关闭方向、开启方向、门宽
-const DOORS = [
+let DOORS = [
   {name:'小孩房门',rect:[4580,2400,4820,3280],h:[4580,3280],c:[0,-1],o:[-1,0],len:880},
   {name:'主卧门',rect:[6360,2400,6600,3280],h:[6600,3280],c:[0,-1],o:[1,0],len:880},
   {name:'主卫门',rect:[6360,1198,6600,1983],h:[6360,1198],c:[0,1],o:[-1,0],len:785},
@@ -437,12 +437,12 @@ const DOORS = [
   {name:'入户门',rect:[4580,8310,4820,9200],h:[4820,9200],c:[0,-1],o:[1,0],len:890,entry:true},
 ];
 // 推拉门
-const SLIDES = [
+let SLIDES = [
   {rect:[10270,7400,10510,9770],v:true},
   {rect:[1275,4950,2090,5190],v:false},
 ];
 const R = (x0,y0,x1,y1) => [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
-const ROOMS = [
+let ROOMS = [
   {id:'master', name:'主卧室', poly:R(6600,0,10270,3370), mat:'wood', at:[8435,2420]},
   {id:'mbath', name:'主卫浴', poly:R(4820,0,6360,2080), mat:'antislip', at:[5980,1780]},
   {id:'kid', name:'小孩房', poly:R(1820,0,4580,3370), mat:'wood', at:[3380,2330]},
@@ -457,6 +457,67 @@ const ROOMS = [
   {id:'bay1', name:'主卧飘窗', poly:[[10270,800],[10510,800],[10510,760],[11030,760],[11030,2650],[10510,2650],[10510,2600],[10270,2600]], mat:'marble', counted:false},
   {id:'bay2', name:'子女房飘窗', poly:[[10270,4260],[10510,4260],[10510,4210],[11030,4210],[11030,5785],[10510,5785],[10510,5740],[10270,5740]], mat:'marble', counted:false},
 ];
+const DEFAULT_PLAN = JSON.parse(JSON.stringify({rooms:ROOMS,walls:WALLS,windows:WINS,doors:DOORS,slides:SLIDES,height:2800}));
+let appliedPlan = null;
+function applyPlan(){
+  const plan = state.plan || DEFAULT_PLAN;
+  if (appliedPlan === plan) return;
+  appliedPlan = plan;
+  ROOMS = plan.rooms; WALLS = plan.walls; WINS = plan.windows; DOORS = plan.doors; SLIDES = plan.slides;
+  const pts = ROOMS.flatMap(r => r.poly).concat(WALLS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]), WINS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]));
+  const b=pts.reduce((b,p)=>[Math.min(b[0],p[0]),Math.min(b[1],p[1]),Math.max(b[2],p[0]),Math.max(b[3],p[1])],[Infinity,Infinity,-Infinity,-Infinity]);
+  Object.assign(BOUNDS,{x:b[0]-1500,y:b[1]-1500,w:b[2]-b[0]+3000,h:b[3]-b[1]+3000});
+}
+// Validate before changing the current project. Version 2 uses millimetres and axis-aligned wall rectangles.
+function readProject(input){
+  const fail = message => { throw new Error(message); };
+  const obj = v => v && typeof v === 'object' && !Array.isArray(v);
+  const num = v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v)<=100000;
+  const point = v => Array.isArray(v) && v.length===2 && v.every(num);
+  const rect = v => Array.isArray(v) && v.length>=4 && v.slice(0,4).every(num) && v[2]>v[0] && v[3]>v[1];
+  const list = (v,n) => { if(!Array.isArray(v)||v.length>2000) fail(n+': expected an array (max 2000)'); return v; };
+  if(!obj(input)) fail('Expected a JSON object');
+  const s=JSON.parse(JSON.stringify(input));
+  if(s.version!==undefined && s.version!==2) fail('Unsupported project version');
+  if(s.plan){
+    if(s.version!==2 || s.units!=='mm') fail('Full plans require version: 2 and units: "mm"');
+    const p=s.plan;
+    if(!obj(p)||!num(p.height)||p.height<2200||p.height>6000) fail('plan.height must be 2200–6000 mm');
+    const ids=new Set();
+    list(p.rooms,'plan.rooms').forEach(r=>{
+      if(!obj(r)||typeof r.id!=='string'||! /^[a-zA-Z0-9_-]{1,64}$/.test(r.id)||['__proto__','constructor','prototype'].includes(r.id)||ids.has(r.id)) fail('Invalid or duplicate room id');
+      ids.add(r.id);
+      if(typeof r.name!=='string'||r.name.length>120||!Array.isArray(r.poly)||r.poly.length<3||r.poly.length>200||!r.poly.every(point)) fail('Invalid room name or polygon');
+      const a=Math.abs(r.poly.reduce((n,v,i)=>{const q=r.poly[(i+1)%r.poly.length];return n+v[0]*q[1]-q[0]*v[1];},0));
+      if(a<20000) fail('Room polygon has zero or negligible area');
+      if(!Object.hasOwn(MATS,r.mat)) fail('Unknown room material');
+      r.at ||= [r.poly.reduce((n,v)=>n+v[0],0)/r.poly.length,r.poly.reduce((n,v)=>n+v[1],0)/r.poly.length];
+      if(!point(r.at)) fail('Invalid room label position');
+    });
+    if(!ids.size) fail('At least one room is required');
+    list(p.walls,'plan.walls').forEach(w=>{if(!rect(w)||!['b','e','n','low'].includes(w[4])) fail('Invalid wall rectangle/type');});
+    p.windows ||= []; p.doors ||= []; p.slides ||= [];
+    list(p.windows,'plan.windows').forEach(w=>{if(!rect(w)||!num(w[4])||!num(w[5])||w[4]<0||w[5]<=w[4]||w[5]>p.height) fail('Window requires [x0,y0,x1,y1,sill,head] in mm');});
+    list(p.doors,'plan.doors').forEach(d=>{
+      if(!obj(d)||!rect(d.rect)||!point(d.h)||!point(d.c)||!point(d.o)||!num(d.len)||d.len<300||d.len>3000) fail('Invalid door');
+      if(Math.abs(d.c[0])+Math.abs(d.c[1])!==1||Math.abs(d.o[0])+Math.abs(d.o[1])!==1||d.c[0]*d.o[0]+d.c[1]*d.o[1]!==0) fail('Door directions must be perpendicular axis unit vectors');
+      d.height ??= 2100;if(!num(d.height)||d.height<1800||d.height>p.height) fail('Invalid door height');
+    });
+    list(p.slides,'plan.slides').forEach(d=>{if(!obj(d)||!rect(d.rect)||typeof d.v!=='boolean') fail('Invalid sliding door'); d.height ??=2100;if(!num(d.height)||d.height<1800||d.height>p.height) fail('Invalid sliding door height');});
+  }
+  const plan=s.plan||DEFAULT_PLAN;
+  s.furniture ??=[];
+  const types=new Set(LIB.flatMap(c=>c.items.map(i=>i[0]))), furnitureIds=new Set();
+  list(s.furniture,'furniture').forEach(f=>{
+    if(!obj(f)||typeof f.id!=='string'||! /^[a-zA-Z0-9_-]{1,80}$/.test(f.id)||furnitureIds.has(f.id)||!types.has(f.type)||typeof f.name!=='string'||f.name.length>120||![f.cx,f.cy,f.w,f.d,f.rot].every(num)||f.w<=0||f.d<=0||typeof f.color!=='string'||!/^#[0-9a-f]{6}$/i.test(f.color)) fail('Invalid furniture');
+    furnitureIds.add(f.id);
+  });
+  const overrides=obj(s.rooms)?s.rooms:{};s.rooms={};
+  plan.rooms.forEach(r=>{const v=Object.hasOwn(overrides,r.id)?overrides[r.id]:{};if(!obj(v)) fail('Invalid room settings');s.rooms[r.id]={name:typeof v.name==='string'?v.name.slice(0,120):r.name,mat:Object.hasOwn(MATS,v.mat)?v.mat:r.mat};});
+  s.demolished ??=[];list(s.demolished,'demolished').forEach(id=>{if(typeof id!=='string'||!/^w\d+$/.test(id)||Number(id.slice(1))>=plan.walls.length)fail('Invalid demolished wall');});
+  s.measures ??=[];list(s.measures,'measures').forEach(m=>{if(!obj(m)||!obj(m.a)||!obj(m.b)||![m.a.x,m.a.y,m.b.x,m.b.y].every(num))fail('Invalid measurement');});
+  return s;
+}
 const MATS = {
   wood:    {name:'橡木地板', price:320, sw:'#d8b88a'},
   walnut:  {name:'胡桃木地板', price:380, sw:'#9b7250'},
@@ -537,13 +598,13 @@ function defaultFurniture(){ return [
 ];}
 
 function defaultState(){
-  const rooms = {}; ROOMS.forEach(r => rooms[r.id] = {name:r.name, mat:r.mat});
+  const rooms = {}; DEFAULT_PLAN.rooms.forEach(r => rooms[r.id] = {name:r.name, mat:r.mat});
   return {furniture:defaultFurniture(), rooms, demolished:[], measures:[]};
 }
 
 const STORE = 'huxing-design-v1';
 function load(){
-  try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && Array.isArray(s.furniture)) return fixState(s); } catch(e) {}
+  try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && Array.isArray(s.furniture)) return readProject(s); } catch(e) {}
   return null;
 }
 function fixState(s){
@@ -793,6 +854,7 @@ function renderLabels(){
 }
 
 function renderDims(){
+  if(state.plan){ $('#gDims').innerHTML=''; return; }
   const DC = '#7d7160', LS = `stroke="${DC}" stroke-width="1" vector-effect="non-scaling-stroke"`, TK = `stroke="${DC}" stroke-width="2" vector-effect="non-scaling-stroke"`;
   const txt = (x,y,v,rot) => `<text x="${x}" y="${y}" font-size="${v<400?140:200}" text-anchor="middle" fill="${DC}" ${rot?`transform="rotate(-90 ${x} ${y})"`:''}>${v}</text>`;
   const chain = (horiz, at, start, segs) => {
@@ -814,7 +876,7 @@ function renderDims(){
 }
 
 function renderGrid(){
-  $('#gGrid').innerHTML = `<rect x="-20000" y="-20000" width="55000" height="55000" fill="${ui.layers.grid ? 'url(#grid)' : 'transparent'}" data-bg="1"/>`;
+  $('#gGrid').innerHTML = `<rect x="${BOUNDS.x-BOUNDS.w*2}" y="${BOUNDS.y-BOUNDS.h*2}" width="${BOUNDS.w*5}" height="${BOUNDS.h*5}" fill="${ui.layers.grid ? 'url(#grid)' : 'transparent'}" data-bg="1"/>`;
 }
 
 function renderMeasure(){
@@ -862,6 +924,7 @@ function renderSel(){
 }
 
 function renderAll(){
+  applyPlan(); renderOpenings(); renderDims();
   renderGrid(); renderRooms(); renderFurn(); renderWalls(); renderLabels(); renderMeasure(); renderSel(); renderPanel(); updateHeader();
   window.View3D?.sync();
 }
@@ -1005,7 +1068,7 @@ function roomPanel(r){
       <div><small>${tr('周长','Perimeter')}</small><span class="big">${fmt(perim(r.poly),1)}</span> m</div>
       <div><small>${tr('开间','Width')}</small><span class="big">${x1-x0}</span> mm</div>
       <div><small>${tr('进深','Depth')}</small><span class="big">${y1-y0}</span> mm</div></div>
-    <div class="muted">${tr(`墙面面积（层高 2.8m，未扣门窗）约 ${fmt(perim(r.poly)*2.8,1)} m²`, `Wall area (2.8m ceiling, openings not deducted) ≈ ${fmt(perim(r.poly)*2.8,1)} m²`)}</div></section>
+    <div class="muted">${tr(`墙面面积（层高 2.8m，未扣门窗）约 ${fmt(perim(r.poly)*(state.plan?.height || 2800)/1000,1)} m²`, `Wall area (${(state.plan?.height || 2800)/1000}m ceiling, openings not deducted) ≈ ${fmt(perim(r.poly)*(state.plan?.height || 2800)/1000,1)} m²`)}</div></section>
   <section><h3>${tr('地面材料','Flooring')}</h3><div class="mats">${mats}</div>
     <div class="total"><span>${tr('材料估价','Estimated cost')}</span><b>¥${Math.round(a*MATS[st.mat].price*1.05).toLocaleString()}</b></div></section>
   <section><h3>${tr('房间内家具','Furniture in room')} <small>${tr(`${inside.length} 件`, `${inside.length} items`)}</small></h3>
@@ -1392,7 +1455,7 @@ function exportPNG(){
   clone.setAttribute('viewBox', `${BOUNDS.x} ${BOUNDS.y} ${BOUNDS.w} ${BOUNDS.h}`);
   clone.setAttribute('width', W); clone.setAttribute('height', H);
   clone.querySelector('#gSel').innerHTML = '';
-  clone.querySelector('#gGrid').innerHTML = `<rect x="-20000" y="-20000" width="55000" height="55000" fill="${ui.layers.grid?'url(#grid)':'#f7f4ee'}"/>`;
+  clone.querySelector('#gGrid').innerHTML = `<rect x="${BOUNDS.x-BOUNDS.w*2}" y="${BOUNDS.y-BOUNDS.h*2}" width="${BOUNDS.w*5}" height="${BOUNDS.h*5}" fill="${ui.layers.grid?'url(#grid)':'#f7f4ee'}"/>`;
   const bg = document.createElementNS('http://www.w3.org/2000/svg','rect');
   Object.entries({x:-20000,y:-20000,width:55000,height:55000,fill:'#f7f4ee'}).forEach(([k,v]) => bg.setAttribute(k,v));
   clone.insertBefore(bg, clone.querySelector('#gGrid'));
@@ -1471,13 +1534,13 @@ document.addEventListener('pointerdown', e => { const m = $('details.menu'); if 
 matchMedia('(max-width:1100px)').addEventListener('change', () => drawer(null));
 drawer(null);                                  // 恢复上次的面板收起状态
 $('#exportPng').onclick = exportPNG;
-$('#exportJson').onclick = () => download(tr('户型装修方案', 'floor-plan-design') + '.json', new Blob([JSON.stringify(state, null, 2)], {type:'application/json'}));
+$('#exportJson').onclick = () => download(tr('户型装修方案', 'floor-plan-design') + '.json', new Blob([JSON.stringify({...state,version:2,units:'mm'}, null, 2)], {type:'application/json'}));
 $('#importJson').onclick = () => $('#fileIn').click();
 $('#fileIn').onchange = e => {
-  const file = e.target.files[0]; if (!file) return;
+  const file = e.target.files[0]; if (!file) return; if(file.size>5000000){toast('JSON: maximum 5 MB');e.target.value='';return;}
   file.text().then(txt => {
-    try { const s = JSON.parse(txt); if (!Array.isArray(s.furniture)) throw 0; const b = snap(); state = fixState(s); ui.sel = null; commit(b); renderAll(); toast(tr('方案已导入', 'Plan imported')); }
-    catch(err){ toast(tr('文件格式不正确', 'Invalid file format')); }
+    try { const s = readProject(JSON.parse(txt)); const b = snap(); state = s; ui.sel = null; commit(b); renderAll(); fitView(); toast(tr('方案已导入', 'Plan imported')); }
+    catch(err){ toast(tr('文件格式不正确', 'Invalid file format') + ': ' + err.message); }
   });
   e.target.value = '';
 };
@@ -1501,6 +1564,7 @@ function setLang(l){
 }
 $('#langSel').onclick = e => { const l = e.target.closest('[data-lang]')?.dataset.lang; if (l && l !== LANG) setLang(l); };
 
+applyPlan();
 applyStaticLang(); syncFullscreen();
 buildDefs(); buildLib(); renderOpenings(); renderDims();
 $('#tip').textContent = TIPS()['2d'];
@@ -1521,7 +1585,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {CSS2DRenderer, CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 
 const stage = $('#stage'), host = $('#view3d');
-const OX = 6000, OY = 5300, H = 2.8, FOV = 45;       // 户型中心放在世界原点，层高 2.8 m
+let OX = 6000, OY = 5300, H = 2.8; const FOV = 45;       // 户型中心放在世界原点，层高 2.8 m
 const wx = x => (x - OX) / 1000, wz = y => (y - OY) / 1000, M = v => v / 1000;
 const SW = () => stage.clientWidth, SH = () => stage.clientHeight;
 const opt = {cut:2.8, furn:true, labels:true, night:false, hour:10, mode:'orbit'};
@@ -2313,10 +2377,10 @@ function buildArch(){
     colliders.push([wx(w[0]), wz(w[1]), wx(w[2]), wz(w[3])]);
   });
   // 门洞、飘窗洞口上方过梁
-  [...DOORS.map(d => [d.rect, 2.1]), ...SLIDES.map(s => [s.rect, s.v ? 2.4 : 2.1]), [[10270,800,10510,2600], 2.4], [[10270,4260,10510,5740], 2.4]]
+  [...DOORS.map(d => [d.rect, (d.height || 2100)/1000]), ...SLIDES.map(s => [s.rect, s.height ? s.height/1000 : s.v ? 2.4 : 2.1]), ...(state.plan ? [] : [[ [10270,800,10510,2600], 2.4], [[10270,4260,10510,5740], 2.4]])]
     .forEach(([r, h]) => { if (top > h) wallBox(r, h, top); });
   WINS.forEach((r, i) => {
-    const sill = i === 0 ? 1.4 : i >= 6 ? .45 : .9, head = 2.4;
+    const sill = r[4] !== undefined ? r[4]/1000 : i === 0 ? 1.4 : i >= 6 ? .45 : .9, head = r[5] !== undefined ? r[5]/1000 : 2.4;
     wallBox(r, 0, Math.min(sill, top)); if (top > head) wallBox(r, head, top);
     colliders.push([wx(r[0]), wz(r[1]), wx(r[2]), wz(r[3])]);
     const gTop = Math.min(head, top); if (gTop <= sill) return;
@@ -2328,18 +2392,18 @@ function buildArch(){
     [sill + .02, gTop - .02].forEach(y => { const tr = new THREE.Mesh(new THREE.BoxGeometry(hz ? L : .06, .04, hz ? .06 : L), frameMat); tr.position.set(cx, y, cz); archUp.add(tr); });
   });
   DOORS.forEach(d => {
-    const pivot = new THREE.Group(), L = M(d.len), dh = Math.min(2.05, top);
+    const pivot = new THREE.Group(), L = M(d.len), dh = Math.min((d.height || 2100)/1000-.05, top);
     pivot.position.set(wx(d.h[0]), 0, wz(d.h[1]));
     const leaf = box(L, dh, .04, mat(d.entry ? '#6b4f3a' : '#efe6d8', {roughness:.5}), L/2);
     const knob = new THREE.Mesh(new THREE.SphereGeometry(.03, 12, 8), metal()); knob.position.set(L - .07, Math.min(1, dh - .05), 0); knob.scale.z = 2.2;
     pivot.add(leaf, knob);
-    const ang = v => Math.atan2(-v[1], v[0]), door = {pivot, a0:ang(d.c), a1:ang(d.o), open:true};
+    const ang = v => Math.atan2(-v[1], v[0]), door = {pivot, len:L, a0:ang(d.c), a1:ang(d.o), open:true};
     if (door.a1 - door.a0 > Math.PI) door.a1 -= Math.PI*2; if (door.a0 - door.a1 > Math.PI) door.a1 += Math.PI*2;
     door.cur = door.a1; pivot.rotation.y = door.cur; leaf.userData.door = knob.userData.door = door;
     doors.push(door); archUp.add(pivot);
   });
-  SLIDES.forEach(({rect:[x0, y0, x1, y1], v}) => {
-    const L = M(v ? y1-y0 : x1-x0), ph = Math.min(v ? 2.4 : 2.1, top), pl = L*.55;
+  SLIDES.forEach(({rect:[x0, y0, x1, y1], v, height}) => {
+    const L = M(v ? y1-y0 : x1-x0), ph = Math.min(height ? height/1000 : v ? 2.4 : 2.1, top), pl = L*.55;
     [[-1, -.02], [1, .02]].forEach(([s, off]) => {
       const c = s < 0 ? -L/2 + pl/2 : L/2 - pl/2, x = v ? wx((x0+x1)/2) + off : wx(x0) + L/2 + c, z = v ? wz(y0) + L/2 + c : wz((y0+y1)/2) + off;
       const p = new THREE.Mesh(new THREE.BoxGeometry(v ? .02 : pl, ph, v ? pl : .02), glassMat); p.position.set(x, ph/2, z); archUp.add(p);
@@ -2376,7 +2440,8 @@ function buildLabels(){
 // 只重建变化的部分
 function sync(force){
   if (!inited || (!active && !force)) return;
-  const a = JSON.stringify([state.rooms, state.demolished, opt.cut]), f = JSON.stringify(state.furniture), l = JSON.stringify([state.rooms, opt.cut]);
+  const nextH=(state.plan?.height || 2800)/1000; if(opt.cut===H) opt.cut=nextH; H=nextH; OX=BOUNDS.x+BOUNDS.w/2; OY=BOUNDS.y+BOUNDS.h/2; document.querySelector('[data-cut]').dataset.cut=H;
+  const a = JSON.stringify([state.plan,state.rooms, state.demolished, opt.cut]), f = JSON.stringify([state.plan,state.furniture]), l = JSON.stringify([state.plan,state.rooms, opt.cut]);
   if (force || a !== sigArch){ sigArch = a; buildArch(); }
   if (force || f !== sigFurn){ sigFurn = f; buildFurn(); }
   if (force || l !== sigLabels){ sigLabels = l; buildLabels(); }
@@ -2421,8 +2486,8 @@ function isoFrom(P){
   const d = THREE.MathUtils.clamp(P.p.y, 5, 30), dir = new THREE.Vector3(.3, .82, .49).normalize();
   return pose(P.t.clone(), P.t.clone().addScaledVector(dir, d));
 }
-const isoWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(5.5, 15.5, 10));
-const topWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 19, 1e-4));
+const isoWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(BOUNDS.w/1000*.45, Math.max(BOUNDS.w,BOUNDS.h)/1000*1.2, BOUNDS.h/1000*.8));
+const topWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, Math.max(BOUNDS.h,BOUNDS.w/(SW()/SH()))/1000*1.3, 1e-4));
 const curPose = () => pose(orbit.target.clone(), camera.position.clone());
 // 以目标点为中心做球坐标插值：镜头沿弧线倾斜环绕，而不是直线穿越
 function camTween(A, B, e){
@@ -2572,7 +2637,7 @@ function setMode(m){
     window.select(null);
     if (opt.cut < H){ opt.cut = H; syncCutBtns(); sync(); }
     orbit.enabled = false; fly = null;
-    camera.position.set(wx(4200), 1.6, wz(8755)); camera.lookAt(wx(7000), 1.5, wz(8755));   // 入户门外
+    const start = state.plan ? ROOMS[0].at : [4200,8755]; camera.position.set(wx(start[0]), 1.6, wz(start[1])); camera.lookAt(wx(start[0]+2800), 1.5, wz(start[1]));   // 入户门外
     $('#walkOverlay').style.display = 'flex';
     syncHint3d();
   } else {
@@ -2587,7 +2652,7 @@ function setMode(m){
 function blocked(x, z, r = .22){
   for (const [x0, z0, x1, z1] of colliders) if (x > x0 - r && x < x1 + r && z > z0 - r && z < z1 + r) return true;
   for (const d of doors){
-    const a = d.pivot.rotation.y, px = d.pivot.position.x, pz = d.pivot.position.z, ex = px + Math.cos(a)*.9, ez = pz - Math.sin(a)*.9;
+    const a = d.pivot.rotation.y, px = d.pivot.position.x, pz = d.pivot.position.z, ex = px + Math.cos(a)*d.len, ez = pz - Math.sin(a)*d.len;
     const t = clamp01(((x-px)*(ex-px) + (z-pz)*(ez-pz)) / ((ex-px)**2 + (ez-pz)**2));
     if (Math.hypot(x - (px + t*(ex-px)), z - (pz + t*(ez-pz))) < r*.8) return true;
   }
