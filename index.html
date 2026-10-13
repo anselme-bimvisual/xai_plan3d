@@ -229,6 +229,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <button class="btn chip" id="tgPanel" data-en="Properties ◨">属性 ◨</button>
     </div>
     <div class="brand"><b data-en="Floor Plan · Interior Design">三室两厅两卫 · 装修设计</b><span id="subtitle">原始户型 1:60 · 尺寸单位 mm</span></div>
+    <div class="grp" id="levelControls" hidden><select id="levelSelect" aria-label="Niveau"></select><label class="only3d"><input type="checkbox" id="allLevels"> Ensemble 3D</label></div>
     <div class="grp seg" id="viewSeg" title="切换 2D / 3D (T)" data-en-title="Switch 2D / 3D (T)">
       <span class="pill"></span>
       <button class="btn" data-view="2d" data-en="2D Plan">2D 平面</button>
@@ -465,7 +466,7 @@ function applyPlan(){
   if (appliedPlan === plan) return;
   appliedPlan = plan;
   ROOMS = plan.rooms; WALLS = plan.walls; WINS = plan.windows; DOORS = plan.doors; SLIDES = plan.slides;
-  const pts = ROOMS.flatMap(r => r.poly).concat(WALLS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]), WINS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]));
+  const pts = (state.levels ? state.levels.flatMap(l=>l.plan.rooms) : ROOMS).flatMap(r => r.poly).concat(WALLS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]), WINS.flatMap(w => [[w[0],w[1]],[w[2],w[3]]]));
   const b=pts.reduce((b,p)=>[Math.min(b[0],p[0]),Math.min(b[1],p[1]),Math.max(b[2],p[0]),Math.max(b[3],p[1])],[Infinity,Infinity,-Infinity,-Infinity]);
   Object.assign(BOUNDS,{x:b[0]-1500,y:b[1]-1500,w:b[2]-b[0]+3000,h:b[3]-b[1]+3000});
 }
@@ -478,12 +479,28 @@ function readProject(input){
   const rect = v => Array.isArray(v) && v.length>=4 && v.slice(0,4).every(num) && v[2]>v[0] && v[3]>v[1];
   const list = (v,n) => { if(!Array.isArray(v)||v.length>2000) fail(n+': expected an array (max 2000)'); return v; };
   if(!obj(input)) fail('Expected a JSON object');
+  if(input.version===3){
+    if(input.units!=='mm'||!Array.isArray(input.levels)||!input.levels.length||input.levels.length>12) fail('Version 3 requires 1–12 levels and units mm');
+    const ids=new Set(); let previous=-Infinity;
+    const levels=input.levels.map(level=>{
+      if(!obj(level)||typeof level.id!=='string'||! /^[a-zA-Z0-9_-]{1,64}$/.test(level.id)||ids.has(level.id)||typeof level.name!=='string'||level.name.length>80||!num(level.elevation)||level.elevation<0||level.elevation<=previous||!obj(level.plan)) fail('Invalid level: unique id, name and increasing nonnegative elevation required');
+      ids.add(level.id);previous=level.elevation;
+      const data=readProject({version:2,units:'mm',plan:level.plan,furniture:level.furniture||[],rooms:level.rooms||{},demolished:level.demolished||[],measures:level.measures||[]});
+      return {...data,id:level.id,name:level.name,elevation:level.elevation};
+    });
+    for(let i=1;i<levels.length;i++) if(levels[i].elevation-levels[i].plan.slabThickness < levels[i-1].elevation+levels[i-1].plan.height) fail('Levels overlap: check elevations, clear height and slab thickness');
+    const activeLevel=ids.has(input.activeLevel)?input.activeLevel:levels[0].id;
+    const active=levels.find(l=>l.id===activeLevel);
+    return {version:3,units:'mm',levels,activeLevel,...Object.fromEntries(['plan','furniture','rooms','demolished','measures'].map(k=>[k,active[k]]))};
+  }
+
   const s=JSON.parse(JSON.stringify(input));
   if(s.version!==undefined && s.version!==2) fail('Unsupported project version');
   if(s.plan){
     if(s.version!==2 || s.units!=='mm') fail('Full plans require version: 2 and units: "mm"');
     const p=s.plan;
     if(!obj(p)||!num(p.height)||p.height<2200||p.height>6000) fail('plan.height must be 2200–6000 mm');
+    p.slabThickness ??= 200; if(!num(p.slabThickness)||p.slabThickness<0||p.slabThickness>600) fail('Invalid slabThickness');
     const ids=new Set();
     list(p.rooms,'plan.rooms').forEach(r=>{
       if(!obj(r)||typeof r.id!=='string'||! /^[a-zA-Z0-9_-]{1,64}$/.test(r.id)||['__proto__','constructor','prototype'].includes(r.id)||ids.has(r.id)) fail('Invalid or duplicate room id');
@@ -494,6 +511,12 @@ function readProject(input){
       if(!Object.hasOwn(MATS,r.mat)) fail('Unknown room material');
       r.at ||= [r.poly.reduce((n,v)=>n+v[0],0)/r.poly.length,r.poly.reduce((n,v)=>n+v[1],0)/r.poly.length];
       if(!point(r.at)) fail('Invalid room label position');
+      for(const field of ['holes','ceilingHoles']){
+        r[field] ??=[];
+        if(!Array.isArray(r[field])||r[field].length>20) fail('Invalid room openings');
+        r[field].forEach(h=>{if(!Array.isArray(h)||h.length<3||h.length>40||!h.every(point))fail('Invalid opening polygon');});
+      }
+
     });
     if(!ids.size) fail('At least one room is required');
     list(p.walls,'plan.walls').forEach(w=>{if(!rect(w)||!['b','e','n','low'].includes(w[4])) fail('Invalid wall rectangle/type');});
@@ -509,7 +532,7 @@ function readProject(input){
       stair.steps.forEach(step=>{
         if(!obj(step)||!Array.isArray(step.poly)||step.poly.length<3||step.poly.length>12||!step.poly.every(point)) fail('Invalid stair tread polygon');
         const a=Math.abs(step.poly.reduce((n,v,i)=>{const q=step.poly[(i+1)%step.poly.length];return n+v[0]*q[1]-q[0]*v[1];},0));
-        if(a<200||!num(step.top)||step.top<=previous||step.top>p.height) fail('Step tops must increase, above zero and at or below plan.height');
+        if(a<200||!num(step.top)||step.top<=previous||step.top>p.height+p.slabThickness) fail('Step tops must increase, above zero and at or below plan.height + plan.slabThickness');
         previous=step.top;
       });
     });
@@ -621,7 +644,7 @@ function defaultState(){
 
 const STORE = 'huxing-design-v1';
 function load(){
-  try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && Array.isArray(s.furniture)) return readProject(s); } catch(e) {}
+  try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && (s.version===3 || Array.isArray(s.furniture))) return readProject(s); } catch(e) {}
   return null;
 }
 function fixState(s){
@@ -647,17 +670,38 @@ const ui = {tool:'select', sel:null, mA:null, mCur:null,
 let view = {x0:0, y0:0, s:.06};
 const undoStack = [], redoStack = [];
 
-function save(){ try { localStorage.setItem(STORE, JSON.stringify(state)); } catch(e) {} }
-const snap = () => JSON.stringify(state);
+let showAllLevels=false;
+const LEVEL_KEYS=['plan','furniture','rooms','demolished','measures'];
+function packedProject(){
+  if(!state.levels) return {...state,version:2,units:'mm'};
+  const active=state.levels.find(l=>l.id===state.activeLevel);
+  LEVEL_KEYS.forEach(k=>active[k]=state[k]);
+  return {version:3,units:'mm',activeLevel:state.activeLevel,levels:state.levels};
+}
+function switchLevel(id){
+  if(!state.levels) return;
+  packedProject();const level=state.levels.find(l=>l.id===id);if(!level)return;
+  state.activeLevel=id;LEVEL_KEYS.forEach(k=>state[k]=level[k]);ui.sel=null;ui.mA=ui.mCur=null;
+  save();renderAll();fitView();
+}
+function syncLevelControls(){
+  $('#levelControls').hidden=!state.levels;
+  $('#levelControls').style.display=state.levels?'':'none';
+  $('#levelSelect').innerHTML=(state.levels||[]).map(l=>`<option value="${l.id}" ${l.id===state.activeLevel?'selected':''}>${esc(l.name)}</option>`).join('');
+  if(!state.levels){showAllLevels=false;$('#allLevels').checked=false;}
+}
+function save(){ try { localStorage.setItem(STORE, JSON.stringify(packedProject())); } catch(e) {} }
+const snap = () => JSON.stringify(packedProject());
 function commit(before){ undoStack.push(before); if (undoStack.length > 150) undoStack.shift(); redoStack.length = 0; save(); }
 function mutate(fn){ const b = snap(); fn(); commit(b); renderAll(); }
-function undo(){ if (!undoStack.length) return toast(tr('没有可撤销的操作', 'Nothing to undo')); redoStack.push(snap()); state = JSON.parse(undoStack.pop()); validateSel(); save(); renderAll(); }
-function redo(){ if (!redoStack.length) return; undoStack.push(snap()); state = JSON.parse(redoStack.pop()); validateSel(); save(); renderAll(); }
+function undo(){ if (!undoStack.length) return toast(tr('没有可撤销的操作', 'Nothing to undo')); redoStack.push(snap()); state = readProject(JSON.parse(undoStack.pop())); validateSel(); save(); renderAll(); }
+function redo(){ if (!redoStack.length) return; undoStack.push(snap()); state = readProject(JSON.parse(redoStack.pop())); validateSel(); save(); renderAll(); }
 function validateSel(){ if (ui.sel?.kind==='furn' && !getF(ui.sel.id)) ui.sel = null; }
 const getF = id => state.furniture.find(f => f.id === id);
 
 /* ======================= 几何工具 ======================= */
 const area = poly => Math.abs(poly.reduce((a,p,i) => { const q = poly[(i+1)%poly.length]; return a + p[0]*q[1] - q[0]*p[1]; }, 0)) / 2 / 1e6;
+const roomArea = r => Math.max(0,area(r.poly)-(r.holes||[]).reduce((a,h)=>a+area(h),0));
 const perim = poly => poly.reduce((a,p,i) => { const q = poly[(i+1)%poly.length]; return a + Math.hypot(q[0]-p[0], q[1]-p[1]); }, 0) / 1000;
 const bbox = poly => { const xs = poly.map(p=>p[0]), ys = poly.map(p=>p[1]); return [Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)]; };
 function aabb(f){ const a = f.rot*Math.PI/180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a)); return {hw:f.w/2*c + f.d/2*s, hh:f.w/2*s + f.d/2*c}; }
@@ -808,6 +852,7 @@ function renderRooms(){
   ROOMS.forEach(r => s += `<polygon class="room" data-room="${r.id}" points="${r.poly.map(p=>p.join(',')).join(' ')}" fill="url(#m-${state.rooms[r.id].mat})"/>`);
   const sill = ([a,b,c,d]) => `<rect x="${a}" y="${b}" width="${c-a}" height="${d-b}" fill="#e2dacb" stroke="#b9b0a0" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
   DOORS.forEach(d => s += sill(d.rect)); SLIDES.forEach(d => s += sill(d.rect));
+  ROOMS.forEach(r=>(r.holes||[]).forEach(h=>s+=`<polygon points="${h.map(p=>p.join(',')).join(' ')}" fill="#f7f4ee" stroke="#b5653a" stroke-dasharray="4 3" stroke-width="1" vector-effect="non-scaling-stroke" pointer-events="none"><title>Trémie</title></polygon>`));
   $('#gRooms').innerHTML = s;
 }
 
@@ -866,7 +911,7 @@ function renderLabels(){
   g.innerHTML = ROOMS.filter(r => r.at).map(r => {
     const [x,y] = r.at, halo = 'stroke="#fbf9f4" stroke-width="45" paint-order="stroke" stroke-linejoin="round"';
     return `<text x="${x}" y="${y}" font-size="250" font-weight="600" text-anchor="middle" fill="#2b2824" ${halo}>${esc(nm(state.rooms[r.id].name))}</text>
-      <text x="${x}" y="${y+260}" font-size="175" text-anchor="middle" fill="#7d7366" ${halo}>${fmt(area(r.poly))} m²</text>`;
+      <text x="${x}" y="${y+260}" font-size="175" text-anchor="middle" fill="#7d7366" ${halo}>${fmt(roomArea(r))} m²</text>`;
   }).join('');
 }
 
@@ -953,13 +998,13 @@ function renderStairs(){
 }
 
 function renderAll(){
-  applyPlan(); renderOpenings(); renderDims();
+  applyPlan(); syncLevelControls(); renderOpenings(); renderDims();
   renderGrid(); renderRooms(); renderFurn(); renderWalls(); renderStairs(); renderLabels(); renderMeasure(); renderSel(); renderPanel(); updateHeader();
   window.View3D?.sync();
 }
 
 function updateHeader(){
-  const tot = ROOMS.filter(r => r.counted !== false).reduce((a,r) => a + area(r.poly), 0);
+  const tot = ROOMS.filter(r => r.counted !== false).reduce((a,r) => a + roomArea(r), 0);
   $('#subtitle').textContent = tr(`套内使用面积约 ${fmt(tot)} m² · 尺寸单位 mm · 原图比例 1:60`, `Net floor area ≈ ${fmt(tot)} m² · Units: mm · Original scale 1:60`);
   $('#undo').disabled = !undoStack.length; $('#redo').disabled = !redoStack.length;
   $('#undo').style.opacity = undoStack.length ? 1 : .4; $('#redo').style.opacity = redoStack.length ? 1 : .4;
@@ -980,11 +1025,11 @@ function overviewPanel(){
   const rows = ROOMS.map(r => {
     const st = state.rooms[r.id];
     return `<tr class="click" data-room="${r.id}"><td><span class="sw" style="background:${MATS[st.mat].sw}"></span>${esc(nm(st.name))}${r.counted===false?' <span class="muted">*</span>':''}</td>
-      <td class="r">${fmt(area(r.poly))} m²</td></tr>`;
+      <td class="r">${fmt(roomArea(r))} m²</td></tr>`;
   }).join('');
-  const tot = ROOMS.filter(r => r.counted !== false).reduce((a,r) => a + area(r.poly), 0);
+  const tot = ROOMS.filter(r => r.counted !== false).reduce((a,r) => a + roomArea(r), 0);
   const byMat = {};
-  ROOMS.forEach(r => { const m = state.rooms[r.id].mat; byMat[m] = (byMat[m]||0) + area(r.poly); });
+  ROOMS.forEach(r => { const m = state.rooms[r.id].mat; byMat[m] = (byMat[m]||0) + roomArea(r); });
   let cost = 0;
   const matRows = Object.entries(byMat).map(([m,a]) => { const c = a*MATS[m].price*1.05; cost += c;
     return `<tr><td><span class="sw" style="background:${MATS[m].sw}"></span>${nm(MATS[m].name)}</td><td class="r">${fmt(a,1)} m²</td><td class="r">¥${Math.round(c).toLocaleString()}</td></tr>`; }).join('');
@@ -1088,7 +1133,7 @@ function syncPaneBtns(){
 function closeDrawers(){ if (narrow()) drawer(null); }
 
 function roomPanel(r){
-  const st = state.rooms[r.id], a = area(r.poly), [x0,y0,x1,y1] = bbox(r.poly), inside = state.furniture.filter(f => f.cx>x0&&f.cx<x1&&f.cy>y0&&f.cy<y1);
+  const st = state.rooms[r.id], a = roomArea(r), [x0,y0,x1,y1] = bbox(r.poly), inside = state.furniture.filter(f => f.cx>x0&&f.cx<x1&&f.cy>y0&&f.cy<y1);
   const mats = Object.entries(MATS).map(([k,m]) => `<button class="mat ${k===st.mat?'on':''}" data-mat="${k}"><i style="background:${m.sw}"></i><span>${nm(m.name)}<small>¥${m.price}/m²</small></span></button>`).join('');
   return `<section><h3>${tr('房间','Room')}</h3>
     <div class="form"><label class="full">${tr('名称','Name')}<input id="rName" value="${esc(nm(st.name))}"></label></div>
@@ -1563,7 +1608,7 @@ document.addEventListener('pointerdown', e => { const m = $('details.menu'); if 
 matchMedia('(max-width:1100px)').addEventListener('change', () => drawer(null));
 drawer(null);                                  // 恢复上次的面板收起状态
 $('#exportPng').onclick = exportPNG;
-$('#exportJson').onclick = () => download(tr('户型装修方案', 'floor-plan-design') + '.json', new Blob([JSON.stringify({...state,version:2,units:'mm'}, null, 2)], {type:'application/json'}));
+$('#exportJson').onclick = () => download(tr('户型装修方案', 'floor-plan-design') + '.json', new Blob([JSON.stringify(packedProject(), null, 2)], {type:'application/json'}));
 $('#importJson').onclick = () => $('#fileIn').click();
 $('#fileIn').onchange = e => {
   const file = e.target.files[0]; if (!file) return; if(file.size>5000000){toast('JSON: maximum 5 MB');e.target.value='';return;}
@@ -1593,6 +1638,8 @@ function setLang(l){
 }
 $('#langSel').onclick = e => { const l = e.target.closest('[data-lang]')?.dataset.lang; if (l && l !== LANG) setLang(l); };
 
+$('#levelSelect').onchange=e=>switchLevel(e.target.value);
+$('#allLevels').onchange=e=>{showAllLevels=e.target.checked;ui.sel=null;window.View3D?.sync();};
 applyPlan();
 applyStaticLang(); syncFullscreen();
 buildDefs(); buildLib(); renderOpenings(); renderDims();
@@ -1622,6 +1669,7 @@ const opt = {cut:2.8, furn:true, labels:true, night:false, hour:10, mode:'orbit'
 let inited = false, active = false, raf = 0, anim = null, fly = null;
 let renderer, labelRenderer, scene, camera, orbit, walkCtl, hemi, sun, ground, glassMat, wallMat, capMat, frameMat;
 let archFloor, archUp, furnG, labelG, lampG, colliders = [], selKey = null, selHelper = null;
+let otherLevels, sigLevels='';
 let sigArch = '', sigFurn = '', sigLabels = '', grow = 1, furnGrow = 1;
 const doors = [], keys = {};
 
@@ -1661,7 +1709,8 @@ function init(){
   wallMat = mat('#f4f1eb', {roughness:.92}); capMat = mat('#34312d', {roughness:.9}); frameMat = mat('#5d6166', {roughness:.5, metalness:.4});
 
   archFloor = new THREE.Group(); archUp = new THREE.Group(); furnG = new THREE.Group(); labelG = new THREE.Group(); lampG = new THREE.Group();
-  scene.add(archFloor, archUp, furnG, labelG, lampG);
+  otherLevels=new THREE.Group();
+  scene.add(archFloor, archUp, furnG, labelG, lampG,otherLevels);
 
   const cv = renderer.domElement; let downAt = null, look = null;
   cv.addEventListener('pointerdown', e => {
@@ -2380,18 +2429,24 @@ function wallBox([x0, y0, x1, y1], yb, yt, m){
 const edgeMat = new THREE.LineBasicMaterial({color:0x6f675b}), skirtMat = new THREE.MeshStandardMaterial({color:'#8b7f6e', roughness:.6});
 function shapeOf(poly, flip){ const s = new THREE.Shape(); poly.forEach(([x, y], i) => s[i ? 'lineTo' : 'moveTo'](wx(x), flip ? wz(y) : -wz(y))); return s; }
 
+function roomShape(r,flip=false,ceiling=false){
+  const shape=shapeOf(r.poly,flip);
+  (r[ceiling?'ceilingHoles':'holes']||[]).forEach(poly=>{const hole=new THREE.Path();poly.forEach(([x,y],i)=>hole[i?'lineTo':'moveTo'](wx(x),flip?wz(y):-wz(y)));shape.holes.push(hole);});
+  return shape;
+}
 function buildArch(){
   clearGroup(archFloor); clearGroup(archUp); lampG.clear(); doors.length = 0; colliders = [];
   const top = opt.cut;
   ROOMS.forEach(r => {
     const m = floorMat(state.rooms[r.id].mat), bay = r.counted === false;
-    const geo = bay ? new THREE.ExtrudeGeometry(shapeOf(r.poly), {depth:.45, bevelEnabled:false}) : new THREE.ShapeGeometry(shapeOf(r.poly));
+    const geo = bay ? new THREE.ExtrudeGeometry(shapeOf(r.poly), {depth:.45, bevelEnabled:false}) : new THREE.ExtrudeGeometry(roomShape(r),{depth:(state.plan?.slabThickness ?? 200)/1000,bevelEnabled:false});
     geo.rotateX(-Math.PI/2);
     const fl = new THREE.Mesh(geo, bay ? [m, mat('#e9e4da')] : m);
+    if(!bay) fl.position.y=-(state.plan?.slabThickness ?? 200)/1000;
     fl.receiveShadow = true; fl.userData.room = r.id;
     if (bay){ fl.castShadow = true; archUp.add(fl); } else archFloor.add(fl);
     // 天花：法线朝下，只在室内仰视时可见
-    const cg = new THREE.ShapeGeometry(shapeOf(r.poly, true)); cg.rotateX(Math.PI/2);
+    const cg = new THREE.ShapeGeometry(roomShape(r,true,true)); cg.rotateX(Math.PI/2);
     const ceil = new THREE.Mesh(cg, mat('#fbfaf7', {roughness:1})); ceil.position.y = H; ceil.visible = top >= H; archUp.add(ceil);
     if (r.at){
       const lamp = new THREE.Mesh(new THREE.CylinderGeometry(.22, .22, .02, 32), new THREE.MeshStandardMaterial({color:'#fff', emissive:'#fff2d6', emissiveIntensity:.3}));
@@ -2442,7 +2497,7 @@ function buildArch(){
   });
   // Each tread is a solid extrusion from floor level to its specified elevation.
   (state.plan?.stairs || []).forEach(stair=>stair.steps.forEach(step=>{
-    const height=Math.min(step.top/1000,top);
+    const height=top>=H ? step.top/1000 : Math.min(step.top/1000,top);
     const geo=new THREE.ExtrudeGeometry(shapeOf(step.poly),{depth:height,bevelEnabled:false});
     geo.rotateX(-Math.PI/2);
     const mesh=new THREE.Mesh(geo,mat(stair.color,{roughness:.8}));
@@ -2462,12 +2517,12 @@ function buildLabels(){
   labelG.children.slice().forEach(o => { o.element.remove(); labelG.remove(o); });
   ROOMS.filter(r => r.at).forEach(r => {
     const el = document.createElement('div'); el.className = 'rlabel';
-    el.innerHTML = `${esc(nm(state.rooms[r.id].name))}<small>${area(r.poly).toFixed(1)}m²</small>`;
+    el.innerHTML = `${esc(nm(state.rooms[r.id].name))}<small>${roomArea(r).toFixed(1)}m²</small>`;
     const o = new CSS2DObject(el); o.position.set(wx(r.at[0]), opt.cut + .15, wz(r.at[1])); o.visible = labelG.visible; labelG.add(o);
   });
   const counted = ROOMS.filter(r => r.counted !== false);
-  $('#roomList').innerHTML = counted.map(r => `<button data-room="${r.id}"><span>${esc(nm(state.rooms[r.id].name))}</span><small>${area(r.poly).toFixed(2)} m²</small></button>`).join('')
-    + `<button data-room="__all"><span>${tr('全屋', 'Whole home')}</span><small>${counted.reduce((a, r) => a + area(r.poly), 0).toFixed(2)} m²</small></button>`;
+  $('#roomList').innerHTML = counted.map(r => `<button data-room="${r.id}"><span>${esc(nm(state.rooms[r.id].name))}</span><small>${roomArea(r).toFixed(2)} m²</small></button>`).join('')
+    + `<button data-room="__all"><span>${tr('全屋', 'Whole home')}</span><small>${counted.reduce((a, r) => a + roomArea(r), 0).toFixed(2)} m²</small></button>`;
   document.querySelectorAll('#roomList button').forEach(b => b.onclick = () => {
     document.querySelectorAll('#roomList button').forEach(x => x.classList.toggle('on', x === b));
     if (opt.mode === 'walk') setMode('orbit');
@@ -2475,20 +2530,45 @@ function buildLabels(){
   });
 }
 
+function syncOtherLevels(){
+  const signature=JSON.stringify([showAllLevels,packedProject(),opt.cut,opt.furn,opt.night]);
+  if(signature===sigLevels)return;sigLevels=signature;
+  clearGroup(otherLevels);
+  const elevation=showAllLevels?(state.levels?.find(l=>l.id===state.activeLevel)?.elevation||0)/1000:0;
+  [archFloor,archUp,furnG,labelG,lampG].forEach(g=>g.position.y=elevation);
+  document.querySelector('[data-mode="walk"]').disabled=showAllLevels;
+  if(!showAllLevels||!state.levels)return;
+  const original={state,ROOMS,WALLS,WINS,DOORS,SLIDES,archFloor,archUp,furnG,lampG,H,cut:opt.cut,colliders,doors:[...doors]};
+  try{
+    for(const level of original.state.levels){
+      if(level.id===original.state.activeLevel)continue;
+      state=level;ROOMS=level.plan.rooms;WALLS=level.plan.walls;WINS=level.plan.windows;DOORS=level.plan.doors;SLIDES=level.plan.slides;H=level.plan.height/1000;
+      opt.cut=original.cut===original.H?H:Math.min(original.cut,H);
+      archFloor=new THREE.Group();archUp=new THREE.Group();furnG=new THREE.Group();lampG=new THREE.Group();
+      buildArch();buildFurn();archUp.scale.y=1;furnG.scale.y=1;
+      const group=new THREE.Group();group.add(archFloor,archUp,furnG,lampG);group.position.y=level.elevation/1000;otherLevels.add(group);
+    }
+  }finally{
+    ({state,ROOMS,WALLS,WINS,DOORS,SLIDES,archFloor,archUp,furnG,lampG,H,colliders}=original);opt.cut=original.cut;doors.splice(0,doors.length,...original.doors);
+  }
+}
 // 只重建变化的部分
 function sync(force){
   if (!inited || (!active && !force)) return;
+  if(showAllLevels && opt.mode==='walk')setMode('orbit');
   const nextH=(state.plan?.height || 2800)/1000; if(opt.cut===H) opt.cut=nextH; H=nextH; OX=BOUNDS.x+BOUNDS.w/2; OY=BOUNDS.y+BOUNDS.h/2; document.querySelector('[data-cut]').dataset.cut=H;
   const a = JSON.stringify([state.plan,state.rooms, state.demolished, opt.cut]), f = JSON.stringify([state.plan,state.furniture]), l = JSON.stringify([state.plan,state.rooms, opt.cut]);
   if (force || a !== sigArch){ sigArch = a; buildArch(); }
   if (force || f !== sigFurn){ sigFurn = f; buildFurn(); }
   if (force || l !== sigLabels){ sigLabels = l; buildLabels(); }
+  syncOtherLevels();
 }
 
 // CSS2DRenderer 只看标签自身的 visible，不继承父级，所以逐个设置
 function showLabels(v){ labelG.visible = v; labelG.children.forEach(o => o.visible = v); }
 function applyGrow(){
   if (!inited) return;
+  if(otherLevels)otherLevels.scale.y=Math.max(grow,.001);
   archUp.scale.y = Math.max(grow, .001);
   furnG.scale.y = Math.max(furnGrow, .001);
   lampG.visible = grow > .99;
@@ -2524,8 +2604,9 @@ function isoFrom(P){
   const d = THREE.MathUtils.clamp(P.p.y, 5, 30), dir = new THREE.Vector3(.3, .82, .49).normalize();
   return pose(P.t.clone(), P.t.clone().addScaledVector(dir, d));
 }
-const isoWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(BOUNDS.w/1000*.45, Math.max(BOUNDS.w,BOUNDS.h)/1000*1.2, BOUNDS.h/1000*.8));
-const topWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, Math.max(BOUNDS.h,BOUNDS.w/(SW()/SH()))/1000*1.3, 1e-4));
+const buildingHeight=()=>showAllLevels&&state.levels ? Math.max(...state.levels.map(l=>(l.elevation+l.plan.height)/1000)) : 0;
+const isoWhole = () => pose(new THREE.Vector3(0, buildingHeight()/2, 0), new THREE.Vector3(BOUNDS.w/1000*.45+buildingHeight(), Math.max(BOUNDS.w,BOUNDS.h)/1000*1.2+buildingHeight(), BOUNDS.h/1000*.8+buildingHeight()));
+const topWhole = () => pose(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, Math.max(BOUNDS.h,BOUNDS.w/(SW()/SH()))/1000*1.3+buildingHeight(), 1e-4));
 const curPose = () => pose(orbit.target.clone(), camera.position.clone());
 // 以目标点为中心做球坐标插值：镜头沿弧线倾斜环绕，而不是直线穿越
 function camTween(A, B, e){
@@ -2590,6 +2671,7 @@ async function exit(){
 /* ======================= 选择 / 拾取 ======================= */
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
 function pick(e){
+  if(showAllLevels)return null;
   if (!e) ptr.set(0, 0);
   else { const r = renderer.domElement.getBoundingClientRect(); ptr.set((e.clientX - r.left)/r.width*2 - 1, -(e.clientY - r.top)/r.height*2 + 1); }
   ray.setFromCamera(ptr, camera);
@@ -2608,7 +2690,7 @@ function pick(e){
 // 屏幕点 → 地面（y = 0）上的户型坐标 mm；s = 该处每 mm 对应的屏幕像素，用于拖放时的幽灵图大小
 const ground0 = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function groundAt(x, y){
-  if (!active || anim) return null;
+  if (!active || anim || showAllLevels) return null;
   const r = renderer.domElement.getBoundingClientRect(), hit = new THREE.Vector3();
   ptr.set((x - r.left)/r.width*2 - 1, -(y - r.top)/r.height*2 + 1);
   ray.setFromCamera(ptr, camera);
@@ -2669,7 +2751,7 @@ function bindJoystick(){
   el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
 }
 function setMode(m){
-  if (anim) return;
+  if (anim || (m==='walk' && showAllLevels)) return;
   opt.mode = m; syncModeBtns();
   if (m === 'walk'){
     window.select(null);
@@ -2744,9 +2826,9 @@ function bindUI(){
   document.querySelectorAll('[data-cut]').forEach(b => b.onclick = () => { if (opt.mode === 'walk') return; opt.cut = +b.dataset.cut; syncCutBtns(); sync(); });
   document.querySelectorAll('#toggles3d .btn').forEach(b => b.onclick = () => {
     const k = b.dataset.t; opt[k] = !opt[k]; b.classList.toggle('on', opt[k]);
-    if (k === 'furn'){ furnG.visible = opt.furn; if (!opt.furn && ui.sel?.kind === 'furn') window.select(null); }
+    if (k === 'furn'){sigLevels='';syncOtherLevels(); furnG.visible = opt.furn; if (!opt.furn && ui.sel?.kind === 'furn') window.select(null); }
     if (k === 'labels') showLabels(opt.labels && opt.mode === 'orbit' && !anim);
-    if (k === 'night') applyLight();
+    if (k === 'night'){applyLight();syncOtherLevels();}
   });
   $('#sun').oninput = e => { opt.hour = +e.target.value; applyLight(); };
 }
