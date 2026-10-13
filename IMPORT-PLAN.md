@@ -25,4 +25,14 @@ Joindre `example-plan.json` et le plan coté, puis demander :
 
 ## Limites et contrôle
 
-La validation contrôle les types, bornes et identifiants avant de remplacer le projet, mais ne garantit pas la cohérence architecturale (polygones auto-croisés, chevauchements, exactitude des cotes, passage des portes). Vérifier la 2D avant la 3D. Pas de murs obliques/courbes, escaliers ou étages dans cette version. Les anciennes cotations fixes sont masquées sur les plans importés ; utiliser l’outil de mesure. Les prix des matériaux restent ceux de la démo et doivent être adaptés avant tout usage de devis. Les fichiers sont limités à 5 Mo.
+La validation contrôle les types, bornes et identifiants avant de remplacer le projet, mais ne garantit pas la cohérence architecturale (polygones auto-croisés, chevauchements, exactitude des cotes, passage des portes). Vérifier la 2D avant la 3D. Pas de murs obliques/courbes ni étages dans cette version. Les escaliers sont décrits ci-dessous. Les anciennes cotations fixes sont masquées sur les plans importés ; utiliser l’outil de mesure. Les prix des matériaux restent ceux de la démo et doivent être adaptés avant tout usage de devis. Les fichiers sont limités à 5 Mo.
+
+## Escaliers (extension v2)
+
+`plan.stairs` est facultatif. `example-stairs.json` montre un escalier droit et un quart tournant avec palier, chacun montant de 2800 mm. Ces exemples illustrent le format, pas une validation réglementaire.
+
+Chaque escalier contient `id`, `name`, `color` (hexadécimal), et `steps`, ordonnées dans le sens de montée. Chaque marche est `{ "poly": [[x,y], ...], "top": 175 }` : son emprise horizontale et l’altitude de sa face supérieure en mm depuis le sol. Les altitudes doivent augmenter strictement et ne pas dépasser `plan.height`. Un palier est une marche à emprise plus grande. Des polygones triangulaires ou trapézoïdaux permettent les marches tournantes/balancées ; éviter les chevauchements et les contours auto-croisés.
+
+Instruction complémentaire pour Claude : « Décris l’escalier dans plan.stairs, marche par marche avec poly et top. Respecte l’emprise, le sens de montée, le nombre de marches et la hauteur à franchir. Demande les cotes manquantes ; ne remplace pas un escalier balancé par un palier sans accord. »
+
+Affichage 2D avec lignes de marches et flèche de montée ; volumes 3D pleins sous les marches. Import, export, sauvegarde et annulation utilisent ces mêmes données. Pas encore de modification des marches à la souris, garde-corps, trémie de plafond, étage supérieur ou montée en mode promenade. La vue en coupe tronque les volumes à la hauteur choisie. Pour observer tout l’escalier, utiliser Full walls en vue orbitale.

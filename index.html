@@ -309,6 +309,7 @@ main.drawer-panel #fab{opacity:0;visibility:hidden}
       <g id="gRooms"></g>
       <g id="gFurn"></g>
       <g id="gWalls"></g>
+      <g id="gStairs" pointer-events="none"></g>
       <g id="gOpen"></g>
       <g id="gLabels" pointer-events="none"></g>
       <g id="gDims" pointer-events="none"></g>
@@ -496,6 +497,22 @@ function readProject(input){
     });
     if(!ids.size) fail('At least one room is required');
     list(p.walls,'plan.walls').forEach(w=>{if(!rect(w)||!['b','e','n','low'].includes(w[4])) fail('Invalid wall rectangle/type');});
+    p.stairs ||= [];
+    const stairIds=new Set();
+    list(p.stairs,'plan.stairs').forEach(stair=>{
+      if(!obj(stair)||typeof stair.id!=='string'||! /^[a-zA-Z0-9_-]{1,64}$/.test(stair.id)||stairIds.has(stair.id)) fail('Invalid or duplicate stair id');
+      stairIds.add(stair.id);
+      stair.name ??= 'Stair'; stair.color ??= '#c9b69b';
+      if(typeof stair.name!=='string'||stair.name.length>120||typeof stair.color!=='string'||!/^#[0-9a-f]{6}$/i.test(stair.color)) fail('Invalid stair name or color');
+      if(!Array.isArray(stair.steps)||stair.steps.length<1||stair.steps.length>100) fail('Stairs require 1–100 steps');
+      let previous=0;
+      stair.steps.forEach(step=>{
+        if(!obj(step)||!Array.isArray(step.poly)||step.poly.length<3||step.poly.length>12||!step.poly.every(point)) fail('Invalid stair tread polygon');
+        const a=Math.abs(step.poly.reduce((n,v,i)=>{const q=step.poly[(i+1)%step.poly.length];return n+v[0]*q[1]-q[0]*v[1];},0));
+        if(a<200||!num(step.top)||step.top<=previous||step.top>p.height) fail('Step tops must increase, above zero and at or below plan.height');
+        previous=step.top;
+      });
+    });
     p.windows ||= []; p.doors ||= []; p.slides ||= [];
     list(p.windows,'plan.windows').forEach(w=>{if(!rect(w)||!num(w[4])||!num(w[5])||w[4]<0||w[5]<=w[4]||w[5]>p.height) fail('Window requires [x0,y0,x1,y1,sill,head] in mm');});
     list(p.doors,'plan.doors').forEach(d=>{
@@ -923,9 +940,21 @@ function renderSel(){
   $('#gSel').innerHTML = s;
 }
 
+function renderStairs(){
+  $('#gStairs').innerHTML=(state.plan?.stairs || []).map(stair=>{
+    const centers=stair.steps.map(step=>step.poly.reduce((a,p)=>[a[0]+p[0]/step.poly.length,a[1]+p[1]/step.poly.length],[0,0]));
+    const a=centers.at(-2),b=centers.at(-1);
+    let arrow='';
+    if(a){const angle=Math.atan2(b[1]-a[1],b[0]-a[0]);const wing=150;
+      arrow=`<polyline points="${b[0]-wing*Math.cos(angle-.5)},${b[1]-wing*Math.sin(angle-.5)} ${b.join(',')} ${b[0]-wing*Math.cos(angle+.5)},${b[1]-wing*Math.sin(angle+.5)}" fill="none" stroke="#59452e" stroke-width="2" vector-effect="non-scaling-stroke"/>`;}
+    return `<g><title>${esc(stair.name)}</title>`+stair.steps.map(step=>`<polygon points="${step.poly.map(p=>p.join(',')).join(' ')}" fill="${stair.color}" stroke="#59452e" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('')+
+      `<polyline points="${centers.map(p=>p.join(',')).join(' ')}" fill="none" stroke="#59452e" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`+arrow+'</g>';
+  }).join('');
+}
+
 function renderAll(){
   applyPlan(); renderOpenings(); renderDims();
-  renderGrid(); renderRooms(); renderFurn(); renderWalls(); renderLabels(); renderMeasure(); renderSel(); renderPanel(); updateHeader();
+  renderGrid(); renderRooms(); renderFurn(); renderWalls(); renderStairs(); renderLabels(); renderMeasure(); renderSel(); renderPanel(); updateHeader();
   window.View3D?.sync();
 }
 
@@ -2411,6 +2440,15 @@ function buildArch(){
       [-1, 1].forEach(e => { const fr = new THREE.Mesh(new THREE.BoxGeometry(.04, ph, .04), frameMat); fr.position.set(v ? x : x + e*pl/2, ph/2, v ? z + e*pl/2 : z); archUp.add(fr); });
     });
   });
+  // Each tread is a solid extrusion from floor level to its specified elevation.
+  (state.plan?.stairs || []).forEach(stair=>stair.steps.forEach(step=>{
+    const height=Math.min(step.top/1000,top);
+    const geo=new THREE.ExtrudeGeometry(shapeOf(step.poly),{depth:height,bevelEnabled:false});
+    geo.rotateX(-Math.PI/2);
+    const mesh=new THREE.Mesh(geo,mat(stair.color,{roughness:.8}));
+    mesh.castShadow=mesh.receiveShadow=true;archUp.add(mesh);
+    const edges=new THREE.LineSegments(new THREE.EdgesGeometry(geo),edgeMat);archUp.add(edges);
+  }));
   applyLight(); applyGrow();
 }
 

@@ -3,7 +3,7 @@ const html=fs.readFileSync('index.html','utf8');
 const scripts=[...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)];
 for(const [i,m] of scripts.entries()) if(!m[1].includes('importmap')) {fs.writeFileSync('/tmp/plan-script-'+i+'.mjs',m[2]);require('node:child_process').execFileSync(process.execPath,['--check','/tmp/plan-script-'+i+'.mjs']);}
 const core=html.slice(html.indexOf('let WALLS ='),html.indexOf('const PX_MM'));
-const ctx={console,assert,example:JSON.parse(fs.readFileSync('example-plan.json')),localStorage:{getItem(){return null}}};vm.createContext(ctx);
+const ctx={console,assert,stairsExample:JSON.parse(fs.readFileSync('example-stairs.json')),example:JSON.parse(fs.readFileSync('example-plan.json')),localStorage:{getItem(){return null}}};vm.createContext(ctx);
 vm.runInContext(core+`
 let state = readProject(example); const BOUNDS={}; applyPlan();
 assert.equal(ROOMS.length,1);assert.equal(WALLS.length,6);assert.equal(state.plan.height,3000);assert.equal(BOUNDS.w,8400);
@@ -13,5 +13,10 @@ state=readProject(JSON.parse(saved));applyPlan();assert.equal(ROOMS.length,1);
 for(const change of [s=>s.plan.height=-1,s=>s.plan.rooms[0].id='bad"id',s=>s.plan.windows[0][5]=800,s=>s.plan.walls[0][2]=s.plan.walls[0][0],s=>s.plan.rooms[0].mat='unknown',s=>s.units='m']){
 const s=JSON.parse(saved);change(s);assert.throws(()=>readProject(s));}
 const measured=JSON.parse(saved);measured.measures=[{a:{x:0,y:0},b:{x:5000,y:0}}];assert.equal(readProject(measured).measures.length,1);
+const stairState=readProject(stairsExample);assert.equal(stairState.plan.stairs.length,2);
+assert.equal(stairState.plan.stairs[0].steps.at(-1).top,2800);
+assert.equal(readProject(JSON.parse(JSON.stringify(stairState))).plan.stairs[1].steps.length,16);
+for(const change of [s=>s.plan.stairs[0].steps[0].top=-1,s=>s.plan.stairs[0].steps[1].top=1,s=>s.plan.stairs[0].steps[0].poly=[[0,0],[1,1]],s=>s.plan.stairs[0].color='red',s=>s.plan.stairs[0].steps.at(-1).top=4000]){const s=JSON.parse(JSON.stringify(stairState));change(s);assert.throws(()=>readProject(s));}
+console.log('PASS: stair round trip and five invalid stair cases');
 console.log('PASS: syntax, full import, persistence, geometry switching/undo state, legacy furniture, measurements, six invalid-input cases');
 `,ctx);
